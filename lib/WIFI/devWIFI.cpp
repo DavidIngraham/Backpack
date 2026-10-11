@@ -21,6 +21,9 @@
 #include <StreamString.h>
 
 #include <ESPAsyncWebServer.h>
+// ESP-IDF's TLS server declares a different HTTP method enum in this TU.
+static constexpr auto BP_HTTP_GET = HTTP_GET;
+static constexpr auto BP_HTTP_POST = HTTP_POST;
 #include <ArduinoJson.h>
 
 #include "common.h"
@@ -110,10 +113,14 @@ static bool target_complete = false;
 static bool force_update = false;
 static bool do_flash = false;
 static uint32_t totalSize;
-static UpdateWrapper updater = UpdateWrapper();
+static UpdateWrapper updater;
 
 #if defined(MAVLINK_ENABLED)
 WiFiUDP mavlinkUDP;
+#if defined(PLATFORM_ESP32) && defined(TARGET_TX_BACKPACK)
+#define MAVLINK_WEBSOCKET_ENABLED
+#include "MavlinkWebSocket.h"
+#endif
 
 IPAddress gcsIP;
 bool gcsIPSet = false;
@@ -219,6 +226,9 @@ static struct {
   {"/mui.css", "text/css", (uint8_t *)MUI_CSS, sizeof(MUI_CSS)},
   {"/elrs.css", "text/css", (uint8_t *)ELRS_CSS, sizeof(ELRS_CSS)},
   {"/mui.js", "text/javascript", (uint8_t *)MUI_JS, sizeof(MUI_JS)},
+#if defined(TARGET_TX_BACKPACK)
+  {"/tls.js", "application/javascript", (uint8_t *)TLS_JS, sizeof(TLS_JS)},
+#endif
   {"/scan.js", "text/javascript", (uint8_t *)SCAN_JS, sizeof(SCAN_JS)},
   {"/logo.svg", "image/svg+xml", (uint8_t *)LOGO_SVG, sizeof(LOGO_SVG)},
 #if defined(HAS_HEADTRACKING) || defined(SUPPORT_HEADTRACKING)
@@ -310,6 +320,9 @@ static void GetConfiguration(AsyncWebServerRequest *request)
   json["config"]["ssid"] = station_ssid;
   json["config"]["mode"] = wifiMode == WIFI_STA ? "STA" : "AP";
   json["config"]["product_name"] = firmwareOptions.product_name;
+#if defined(MAVLINK_WEBSOCKET_ENABLED)
+  json["config"]["tls"] = true;
+#endif
 
 #if defined(HAS_HEADTRACKING) || defined(SUPPORT_HEADTRACKING)
   json["config"]["head-tracking"] = true;
@@ -426,7 +439,7 @@ static void WebUpdateHandleNotFound(AsyncWebServerRequest *request)
   message += F("URI: ");
   message += request->url();
   message += F("\nMethod: ");
-  message += (request->method() == HTTP_GET) ? "GET" : "POST";
+  message += (request->method() == BP_HTTP_GET) ? "GET" : "POST";
   message += F("\nArguments: ");
   message += request->args();
   message += F("\n");
@@ -673,6 +686,9 @@ static void startWiFi(unsigned long now)
 
 static void startMDNS()
 {
+#if defined(MAVLINK_WEBSOCKET_ENABLED)
+  if (!mavtls::mdnsLabel.empty()) myHostname = mavtls::mdnsLabel.c_str();
+#endif
   if (!MDNS.begin(myHostname))
   {
     DBGLN("Error starting mDNS");
@@ -709,6 +725,9 @@ static void startMDNS()
     });
   #else
     MDNS.setInstanceName(instance);
+#if defined(MAVLINK_WEBSOCKET_ENABLED)
+    if (mavtls::serverRunning.load()) MDNS.addService("https", "tcp", 443);
+#endif
     MDNS.addService("http", "tcp", 80);
     MDNS.addServiceTxt("http", "tcp", "vendor", "elrs");
     MDNS.addServiceTxt("http", "tcp", "target", (const char *)&target_name[4]);
@@ -740,9 +759,12 @@ static void startServices()
   server.on("/mui.css", WebUpdateSendContent);
   server.on("/elrs.css", WebUpdateSendContent);
   server.on("/mui.js", WebUpdateSendContent);
+#if defined(TARGET_TX_BACKPACK)
+  server.on("/tls.js", WebUpdateSendContent);
+#endif
   server.on("/scan.js", WebUpdateSendContent);
   server.on("/logo.svg", WebUpdateSendContent);
-  server.on("/config", HTTP_GET, GetConfiguration);
+  server.on("/config", BP_HTTP_GET, GetConfiguration);
   server.on("/networks.json", WebUpdateSendNetworks);
   server.on("/sethome", WebUpdateSetHome);
   #if defined(MAVLINK_ENABLED)
@@ -761,14 +783,17 @@ static void startServices()
   server.on("/ncsi.txt", WebUpdateHandleRoot);
   server.on("/fwlink", WebUpdateHandleRoot);
 
-  server.on("/update", HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
+  server.on("/update", BP_HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
   server.on("/forceupdate", WebUploadForceUpdateHandler);
   server.on("/setrtc", WebUploadRTCUpdateHandler);
 #if defined(AAT_BACKPACK)
   WebAatInit(server);
 #endif
 #if defined(MAVLINK_ENABLED)
-  server.on("/mavlink", HTTP_GET, WebMAVLinkHandler);
+  server.on("/mavlink", BP_HTTP_GET, WebMAVLinkHandler);
+#if defined(MAVLINK_WEBSOCKET_ENABLED)
+  StartMavlinkWebSocket(server);
+#endif
 #endif
 
   server.onNotFound(WebUpdateHandleNotFound);
@@ -877,6 +902,11 @@ static void HandleWebUpdate()
 
   if (servicesStarted)
   {
+  #if defined(MAVLINK_WEBSOCKET_ENABLED)
+    mavtls::provisioningAllowed.store(wifiService == WIFI_SERVICE_UPDATE && wifiMode == WIFI_AP && !updater.isRunning());
+    if (mavtls::rebootRequested.exchange(false)) rebootTime = millis() + 500;
+    PollMavlinkWebSocket(wifiService == WIFI_SERVICE_MAVLINK_TX && !updater.isRunning());
+  #endif
   #if defined(MAVLINK_ENABLED)
     if (wifiService == WIFI_SERVICE_MAVLINK_TX)
     {
@@ -906,16 +936,19 @@ static void HandleWebUpdate()
           remote = WiFi.broadcastIP();
         }
 
-        mavlinkUDP.beginPacket(remote, config.GetMavlinkSendPort());
+        bool udpWritable = mavlinkUDP.beginPacket(remote, config.GetMavlinkSendPort());
         mavlink_message_t* msgQueue = mavlink.GetQueuedMsgs();
         for (uint8_t i = 0; i < mavlink.GetQueuedMsgCount(); i++)
         {
           uint8_t buf[MAVLINK_MAX_PACKET_LEN];
           uint16_t len = mavlink_msg_to_send_buffer(buf, &msgQueue[i]);
-          size_t sent = mavlinkUDP.write(buf, len);
-          if (sent < len)
+          #if defined(MAVLINK_WEBSOCKET_ENABLED)
+          SendMavlinkWebSocket(buf, len);
+          #endif
+          // UDP failure must not prevent delivery to the WebSocket client.
+          if (udpWritable && mavlinkUDP.write(buf, len) < len)
           {
-            break;
+            udpWritable = false;
           }
         }
         mavlinkUDP.endPacket();
@@ -932,8 +965,13 @@ static void HandleWebUpdate()
           gcsIP = mavlinkUDP.remoteIP(); // store the IP of the GCS so we can send to it directly
           gcsIPSet = true;
           uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-          mavlinkUDP.read(buf, packetSize);
-          mavlink.ProcessMAVLinkFromGCS(buf, packetSize);
+          // UDP datagrams can contain multiple MAVLink packets.
+          while (mavlinkUDP.available())
+          {
+            int received = mavlinkUDP.read(buf, sizeof(buf));
+            if (received <= 0) break;
+            mavlink.ProcessMAVLinkFromGCS(buf, received);
+          }
         }
       }
     }

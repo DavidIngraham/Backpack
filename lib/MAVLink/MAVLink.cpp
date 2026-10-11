@@ -44,14 +44,21 @@ MAVLink::ProcessMAVLinkFromTX(uint8_t c)
 }
 
 void
-MAVLink::ProcessMAVLinkFromGCS(uint8_t *data, uint16_t len)
+MAVLink::ResetGCSParser(uint8_t channel)
+{
+    // MAVLink's channel buffers are local to this translation unit.
+    mavlink_reset_channel_status(channel);
+}
+
+void
+MAVLink::ProcessMAVLinkFromGCS(uint8_t *data, uint16_t len, uint8_t channel)
 {
     mavlink_status_t status;
     mavlink_message_t msg;
 
     for (uint16_t i = 0; i < len; i++)
     {
-        if (mavlink_frame_char(MAVLINK_COMM_1, data[i], &msg, &status) != MAVLINK_FRAMING_INCOMPLETE)
+        if (mavlink_frame_char(channel, data[i], &msg, &status) != MAVLINK_FRAMING_INCOMPLETE)
         {
             // Send the message to the tx uart
             uint8_t buf[MAVLINK_MAX_PACKET_LEN];

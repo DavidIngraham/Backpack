@@ -64,6 +64,10 @@ jobs:
         platformio platform install native
         mkdir -p ~/artifacts/firmware
         pio run -e ${{ matrix.target }}
+        if [ '${{ matrix.target }}' = 'ESP32C3_TX_Backpack_via_UART' ]; then
+          bash test/websocket/run.sh
+          bash test/tls/run.sh
+        fi
         mv .pio/build/${{ matrix.target }} ~/artifacts/firmware/`echo ${{ matrix.target }} | sed s/_via_UART//`
         cp -r hardware ~/artifacts/firmware
 

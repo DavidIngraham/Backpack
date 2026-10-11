@@ -19,9 +19,10 @@ typedef struct {
 class MAVLink
 {
 public:
-    MAVLink() : mavlink_to_gcs_buf_count(0), expectedSeq(0), expectedSeqSet(false) {}
+    MAVLink() : mavlink_stats{}, mavlink_to_gcs_buf_count(0), expectedSeq(0), expectedSeqSet(false) {}
     void ProcessMAVLinkFromTX(uint8_t c);
-    void ProcessMAVLinkFromGCS(uint8_t *data, uint16_t len);
+    void ProcessMAVLinkFromGCS(uint8_t *data, uint16_t len, uint8_t channel = MAVLINK_COMM_1);
+    void ResetGCSParser(uint8_t channel);
 
     // Getters
     mavlink_stats_t* GetMavlinkStats() { return &mavlink_stats; }

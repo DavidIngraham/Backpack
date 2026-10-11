@@ -122,6 +122,22 @@
 						</tr>
 					</table>
 				</form>
+				<section id="tls_panel" hidden>
+					<h3>Secure GCS connection</h3>
+					<p>To install or replace a certificate, enter Backpack Wi-Fi update mode and connect directly to its access point.</p>
+					<p>Upload the JSON bundle created by <code>python/provision_tls.py</code>. Install its CA profile on your iPad
+					and enable full trust in Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings.
+					Use the URL from <code>connection.txt</code> in your GCS, then enable MAVLink Wi-Fi telemetry.</p>
+					<p id="tls_status"></p>
+					<p id="tls_fingerprint" style="overflow-wrap:anywhere;"></p>
+					<form id="tls_form">
+						<input id="tls_file" type="file" accept=".json" required>
+						<button id="tls_upload" type="submit" class="mui-btn mui-btn--primary" disabled>Install TLS settings</button>
+					</form>
+					<button id="tls_remove" type="button" class="mui-btn" disabled>Remove TLS settings</button>
+					<button id="tls_restart" type="button" class="mui-btn" disabled>Restart to apply</button>
+					<p id="tls_message" role="status"></p>
+				</section>
 				<h3>MavLink Statistics</h3>
 				<table class="mui-table">
 					<tr>
@@ -184,4 +200,5 @@
 </body>
 <script src="mui.js"></script>
 <script src="scan.js"></script>
+<script src="tls.js"></script>
 </html>

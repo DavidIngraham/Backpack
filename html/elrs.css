@@ -377,3 +377,4 @@ body, input, select, textarea {
     transform:rotate(405deg);
   }
 }
+#tls_panel[hidden] { display: none; }

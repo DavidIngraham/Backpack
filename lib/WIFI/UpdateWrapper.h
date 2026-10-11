@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 class UpdateWrapper {
 public:
@@ -46,9 +47,10 @@ public:
 #ifdef PLATFORM_ESP32
     void abort() {
         Update.abort();
+        _running = false;
     }
 #endif
 
 private:
-    bool _running = false;
+    std::atomic<bool> _running{false};
 };
