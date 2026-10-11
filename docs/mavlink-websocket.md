@@ -1,18 +1,23 @@
 # MAVLink over secure WebSockets
 
-ESP32-C3 TX Backpack firmware exposes a provisioned TLS WebSocket endpoint on
+Secure WebSockets let browser-based ground control stations, such as Lofty GCS,
+send and receive MAVLink telemetry through the TX Backpack.
+
+ESP32-C3 TX Backpack firmware provides a TLS WebSocket endpoint on
 port 443: `wss://<paired-hostname>.local/mavlink/ws?token=<pairing-token>`.
 Enable MAVLink Wi-Fi telemetry to accept a connection. The existing HTTP
 configuration page, `/mavlink` statistics and UDP forwarding remain available.
 ESP8266/ESP8285 builds do not include WSS.
 
-The GCS runs as an externally hosted HTTPS PWA and connects to the Backpack's
-secure WebSocket endpoint.
+Open your GCS in a browser and connect to this endpoint after setting up the
+Backpack's certificate. Installing the GCS as a PWA is optional. For use without
+internet access, check that your GCS supports offline use and prepare any maps
+you need before connecting to the Backpack.
 
-## Pair an iPad
+## Set up a browser connection
 
-1. Install/open your GCS PWA while internet access is available. Its service
-   worker must cache everything needed offline before joining a Backpack AP.
+1. Choose a GCS that supports binary MAVLink over WebSockets, such as Lofty GCS.
+   Open it over HTTPS and note its origin for the next step.
 2. On a computer with Python 3.10+ and OpenSSL 1.1.1+, generate credentials:
 
    ```sh
@@ -22,14 +27,13 @@ secure WebSocket endpoint.
 
    Use the **actual HTTPS origin** of your GCS, including a non-default port if
    applicable, without a path or trailing slash. Only that origin is accepted.
-   Use a distinct hostname for each Backpack. The example origin is configurable;
-   this change does not deploy or modify the Lofty PWA.
+   Use a distinct hostname for each Backpack.
 3. Put the Backpack into its existing Wi-Fi firmware-update AP mode. Connect
    directly to its Wi-Fi, open `http://10.0.0.1`, then the **MavLink** tab. Upload
    `backpack-tls.json` in the TLS section. Check the displayed result and restart
    using the provided control. Credential writes are disabled in telemetry or
    station mode and during firmware updates.
-4. Transfer `backpack.mobileconfig` to the iPad and install its profile in
+4. On an iPad, transfer `backpack.mobileconfig` and install its profile in
    Settings. Enable full trust for your personal Backpack CA under **Settings →
    General → About → Certificate Trust Settings**. See Apple's
    [manual certificate trust instructions](https://support.apple.com/en-us/102390).
@@ -41,7 +45,7 @@ secure WebSocket endpoint.
    a short status message without a certificate warning. The configured hostname
    replaces the default Backpack mDNS hostname; HTTP configuration remains
    accessible by IP address.
-6. Paste the URL from `connection.txt` into Lofty's WebSocket connection settings.
+6. Paste the URL from `connection.txt` into your GCS's WebSocket connection settings.
    Allow local-network access if the browser requests it. In AP mode,
    `connection-ap.txt` supplies an alternative using `10.0.0.1` if mDNS resolution
    is unavailable. Generated certificates include that IP SAN; an imported
@@ -49,20 +53,18 @@ secure WebSocket endpoint.
    do not match the generated certificate.
 7. Verify heartbeats and parameter reads before parameter writes.
 
-Lofty's binary WebSocket transport matches this bridge's MAVLink wire contract.
-The PWA must permit the endpoint in its `connect-src` CSP and support offline
-startup. Browser local-network permissions still apply: WSS does not bypass
-them. The endpoint supports an origin-restricted private-network OPTIONS
-preflight for browsers that use one. Actual iPad/PWA/radio interoperability
-requires a physical bench test.
+If the GCS uses a Content Security Policy, its `connect-src` policy must allow
+the Backpack endpoint. Browser local-network permissions also apply. The endpoint
+supports an origin-restricted private-network OPTIONS preflight for browsers
+that use one.
 
-## Credential lifecycle
+## Certificates and pairing
 
 The helper creates an individual EC P-256 server key/certificate, a random
 256-bit pairing token and a personal CA. The server certificate lasts 365 days;
 the CA lasts ten years. `backpack.mobileconfig` contains only the public CA
 certificate. Keep the CA private key on your computer, never on the Backpack or
-in the PWA. Protect the output directory, JSON bundle and connection URLs: they
+in the GCS. Protect the output directory, JSON bundle and connection URLs: they
 contain private material or a token authorizing MAVLink commands.
 
 Renew before expiry using the same CA and hostname, then upload the new bundle
@@ -98,7 +100,7 @@ physical AP/update-mode access remains the provisioning authority. TLS
 authenticates the device and protects WSS traffic; the origin check and token
 authorize the GCS. This does not add authentication to the existing UDP bridge.
 
-## Wire contract and implementation
+## WebSocket protocol
 
 - One authorized browser client at a time; no WebSocket subprotocol.
 - Binary MAVLink v1/v2 bytes in both directions. Each outgoing message contains
@@ -136,8 +138,8 @@ The TX15 target is `ESP32C3_TX_Backpack`. Firmware is emitted at
 The ESP8285 target is a regression build and has no WSS endpoint. See
 `test/tls/README.md` for test coverage and prerequisites.
 
-Before operational use, bench-test on the TX15 and iPad: trusted HTTPS/WSS,
-offline PWA startup, heartbeat reception, parameter reads/writes, mission
+Before operational use, bench-test with your radio and browser: trusted HTTPS/WSS,
+heartbeat reception, parameter reads/writes, mission
 transfer, reconnects, sleep/wake, slow clients, concurrent UDP, TLS heap/stack
 headroom and an OTA update retaining credentials. Host tests and successful
 firmware builds do not establish hardware or flight validation.
